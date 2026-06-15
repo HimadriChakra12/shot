@@ -1,6 +1,9 @@
 # Shot
 A minimal xlib screenshot tool written in C
 
+#### plan
+Gonna Add Window Screenshot from [scr2ppm](https://github.com/igorlogius/scr2ppm) (OPTIONAL)
+
 ## Config
 Config is in the first few lines of `config.h`
 
