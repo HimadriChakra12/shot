@@ -2,6 +2,8 @@
 #include "capture.h"
 #include "../config.h"
 
+#include <png.h>
+#include <jpeglib.h>
 #include <webp/encode.h>
 
 #include <unistd.h>
@@ -16,15 +18,129 @@
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
-static void strip_alpha_channel(void) {
-    char *p1 = img->data + 3;
-    char *p2 = img->data + 4;
-    while (p2 - img->data < img->height * img->bytes_per_line) {
-        *p1 = *p2; ++p1; ++p2;
-        *p1 = *p2; ++p1; ++p2;
-        *p1 = *p2; ++p1;
-        p2 += 2;
+/* Pack BGRA/BGRX scanlines → tightly-packed RGB rows (3 bytes/px). */
+static unsigned char *make_rgb_buf(int *out_stride) {
+    int w = img->width, h = img->height;
+    int stride = w * 3;
+    unsigned char *buf = malloc((size_t)h * stride);
+    if (!buf) return NULL;
+
+    for (int y = 0; y < h; y++) {
+        unsigned char *src = (unsigned char *)img->data + y * img->bytes_per_line;
+        unsigned char *dst = buf + y * stride;
+        for (int x = 0; x < w; x++) {
+            /* X11 stores pixels as BGRX (or BGRA) in 32-bit ints. */
+            if (r < g && g < b) {
+                /* RGB order */
+                dst[0] = src[0]; dst[1] = src[1]; dst[2] = src[2];
+            } else {
+                /* BGR order → swap R and B */
+                dst[0] = src[2]; dst[1] = src[1]; dst[2] = src[0];
+            }
+            src += 4;
+            dst += 3;
+        }
     }
+    *out_stride = stride;
+    return buf;
+}
+
+static int encode_png(const char *fn) {
+    FILE *fp = fopen(fn, "wb");
+    if (!fp) { printf("\033[1;31mError:\033[0m Can't open %s\n", fn); return 1; }
+
+    png_structp png = png_create_write_struct(PNG_LIBPNG_VER_STRING, NULL, NULL, NULL);
+    if (!png) { fclose(fp); return 1; }
+    png_infop info = png_create_info_struct(png);
+    if (!info) { png_destroy_write_struct(&png, NULL); fclose(fp); return 1; }
+
+    if (setjmp(png_jmpbuf(png))) {
+        png_destroy_write_struct(&png, &info);
+        fclose(fp);
+        return 1;
+    }
+
+    int stride;
+    unsigned char *buf = make_rgb_buf(&stride);
+    if (!buf) { png_destroy_write_struct(&png, &info); fclose(fp); return 1; }
+
+    png_init_io(png, fp);
+    png_set_IHDR(png, info, img->width, img->height, 8,
+                 PNG_COLOR_TYPE_RGB, PNG_INTERLACE_NONE,
+                 PNG_COMPRESSION_TYPE_DEFAULT, PNG_FILTER_TYPE_DEFAULT);
+    png_write_info(png, info);
+
+    for (int y = 0; y < img->height; y++)
+        png_write_row(png, buf + y * stride);
+
+    png_write_end(png, NULL);
+    png_destroy_write_struct(&png, &info);
+    free(buf);
+    fclose(fp);
+    debug("PNG written to %s", fn);
+    return 0;
+}
+
+static int encode_jpeg(const char *fn) {
+    FILE *fp = fopen(fn, "wb");
+    if (!fp) { printf("\033[1;31mError:\033[0m Can't open %s\n", fn); return 1; }
+
+    int stride;
+    unsigned char *buf = make_rgb_buf(&stride);
+    if (!buf) { fclose(fp); return 1; }
+
+    struct jpeg_compress_struct cinfo;
+    struct jpeg_error_mgr       jerr;
+    cinfo.err = jpeg_std_error(&jerr);
+    jpeg_create_compress(&cinfo);
+    jpeg_stdio_dest(&cinfo, fp);
+
+    cinfo.image_width      = img->width;
+    cinfo.image_height     = img->height;
+    cinfo.input_components = 3;
+    cinfo.in_color_space   = JCS_RGB;
+    jpeg_set_defaults(&cinfo);
+    jpeg_set_quality(&cinfo, OPTQUALITY, TRUE);
+    jpeg_start_compress(&cinfo, TRUE);
+
+    while (cinfo.next_scanline < cinfo.image_height) {
+        JSAMPROW row = buf + cinfo.next_scanline * stride;
+        jpeg_write_scanlines(&cinfo, &row, 1);
+    }
+
+    jpeg_finish_compress(&cinfo);
+    jpeg_destroy_compress(&cinfo);
+    free(buf);
+    fclose(fp);
+    debug("JPEG written to %s", fn);
+    return 0;
+}
+
+static int encode_webp(const char *fn) {
+    FILE *fp = fopen(fn, "wb");
+    if (!fp) { printf("\033[1;31mError:\033[0m Can't open %s\n", fn); return 1; }
+
+    int stride;
+    unsigned char *buf = make_rgb_buf(&stride);
+    if (!buf) { fclose(fp); return 1; }
+
+    unsigned char *fd = NULL;
+    size_t fs = WebPEncodeRGB(buf, img->width, img->height, stride,
+                              (float)OPTQUALITY, &fd);
+    free(buf);
+
+    int ret = 1;
+    if (fs > 0) {
+        size_t written = fwrite(fd, 1, fs, fp);
+        if (written == fs) ret = 0;
+        else printf("\033[1;31mError:\033[0m Wrote %zu/%zu bytes\n", written, fs);
+    } else {
+        printf("\033[1;31mError:\033[0m WebP encode failed\n");
+    }
+    if (fd) free(fd);
+    fclose(fp);
+    debug("WebP written to %s", fn);
+    return ret;
 }
 
 static int build_path(char fn[PATH_MAX]) {
@@ -53,53 +169,18 @@ static int build_path(char fn[PATH_MAX]) {
 }
 
 static int encode_and_write(const char *fn) {
-    FILE *fp = fopen(fn, "wb");
-    if (!fp) {
-        printf("\033[1;31mError:\033[0m Can't open %s\n", fn);
-        return 1;
-    }
-    debug("Writing to %s", fn);
-
-    unsigned char *fd = NULL;
-    size_t         fs = 0;
-
-    if (r < g && g < b) {
-        fs = WebPEncodeRGB((unsigned char *)img->data,
-                           img->width, img->height,
-                           img->bytes_per_line * 3 / 4, OPTQUALITY, &fd);
-        debug("Pixel format = RGB");
-    } else if (b < g && g < r) {
-        fs = WebPEncodeBGR((unsigned char *)img->data,
-                           img->width, img->height,
-                           img->bytes_per_line * 3 / 4, OPTQUALITY, &fd);
-        debug("Pixel format = BGR");
-    } else {
-        fclose(fp);
-        printf("\033[1;31mError:\033[0m Unsupported pixel format\n");
-        return 1;
-    }
-
-    int ret = 1;
-    if (fs > 0) {
-        size_t written = fwrite(fd, 1, fs, fp);
-        if (written == fs) ret = 0;
-        else printf("\033[1;31mError:\033[0m Wrote %zu/%zu bytes\n", written, fs);
-    } else {
-        printf("\033[1;31mError:\033[0m WebP encode failed\n");
-    }
-
-    if (fd) free(fd);
-    fclose(fp);
-    return ret;
+    const char *fmt = OPTFORMAT_TYPE;
+    if (strcmp(fmt, "jpeg") == 0 || strcmp(fmt, "jpg") == 0)
+        return encode_jpeg(fn);
+    if (strcmp(fmt, "webp") == 0)
+        return encode_webp(fn);
+    /* default: png */
+    return encode_png(fn);
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
-// Save img to disk; copy the resulting path into out_path (size out_size).
-// Returns 0 on success.
 int save_image_path(char *out_path, size_t out_size) {
-    strip_alpha_channel();
-
     char fn[PATH_MAX];
     if (!build_path(fn)) {
         printf("\033[1;31mError:\033[0m Couldn't resolve output path\n");
@@ -112,7 +193,6 @@ int save_image_path(char *out_path, size_t out_size) {
     return 0;
 }
 
-// Legacy: save and exec xclip inline (used by full-screen mode).
 int save_image(void) {
     char fn[PATH_MAX];
     if (save_image_path(fn, sizeof(fn)) != 0) return 1;
@@ -120,5 +200,5 @@ int save_image(void) {
     printf("%s\n", fn);
     char *args[] = { "xclip", "-selection", "clipboard", "-t", "image/png", fn, NULL };
     execvp(args[0], args);
-    return 1; // execvp returned — xclip missing, but file is saved
+    return 1;
 }

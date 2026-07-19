@@ -1,6 +1,6 @@
 CC     = cc
 CFLAGS = -O2 -Wall -Wextra -std=c99 -Isrc
-LIBS   = -lX11 -lwebp
+LIBS   = -lX11 -lwebp -lpng -ljpeg
 # CFLAGS += -DDEBUG
 
 PREFIX  = /usr/local

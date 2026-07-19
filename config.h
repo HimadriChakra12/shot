@@ -4,10 +4,13 @@
 #include <X11/keysym.h>
 
 #define OPTDIR        "~/Pictures/screenshots/"
-#define OPTFORMAT     "%d-%02d-%02d_%02d:%02d:%02d.webp"
+#define OPTFORMAT     "%d-%02d-%02d_%02d:%02d:%02d.png"
 #define OPTFORMATARGS tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, \
                       tm.tm_hour, tm.tm_min, tm.tm_sec
 #define OPTQUALITY    80
+
+/* Output format: "png" (default), "jpeg", or "webp" */
+#define OPTFORMAT_TYPE "png"
 
 // ── Scripts ───────────────────────────────────────────────────────────────────
 // Directory scanned for *.sh files (bound to 1–9 in alphabetical order).

@@ -19,8 +19,14 @@ static void action_save(const char *path) {
 }
 
 static void action_copy(const char *path) {
+    /* Build MIME type string from config: "image/png", "image/jpeg", "image/webp" */
+    static char mime[32];
+    const char *fmt = OPTFORMAT_TYPE;
+    if (strcmp(fmt, "jpg") == 0) fmt = "jpeg"; /* normalise alias */
+    snprintf(mime, sizeof(mime), "image/%s", fmt);
+
     char *args[] = {
-        "xclip", "-selection", "clipboard", "-t", "image/png",
+        "xclip", "-selection", "clipboard", "-t", mime,
         (char *)path, NULL
     };
     execvp(args[0], args);
