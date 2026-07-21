@@ -25,6 +25,7 @@ $(BINARY): $(OBJS)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 install: $(BINARY)
+	strip $(BINARY)
 	install -Dm755 $(BINARY) $(DESTDIR)$(BINDIR)/$(BINARY)
 
 uninstall:
