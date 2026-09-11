@@ -1,5 +1,6 @@
+include fast.mk
 CC     = cc
-CFLAGS = -O2 -Wall -Wextra -std=c99 -Isrc
+CFLAGS = -O2 -Wall -Wextra -std=c99 -D_POSIX_C_SOURCE=200809L -Isrc
 LIBS   = -lX11 -lwebp -lpng -ljpeg
 # CFLAGS += -DDEBUG
 

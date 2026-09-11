@@ -12,6 +12,31 @@
 #include <string.h>
 #include <unistd.h>
 
+// ── Usage ─────────────────────────────────────────────────────────────────────
+
+static void usage(const char *prog) {
+    fprintf(stderr,
+        "Usage: %s [-h] [-f] [-w]\n"
+        "\n"
+        "  (no args)  Interactive region selection (drag to select)\n"
+        "  -f         Fullscreen — capture the entire screen immediately\n"
+        "  -w         Window — click a window to capture it\n"
+        "  -h         Show this help message and exit\n"
+        "\n"
+        "Interactive pre-selection keybinds (before clicking):\n"
+        "  f          Switch to fullscreen mode\n"
+        "  w          Switch to window-pick mode\n"
+        "  Escape     Cancel\n"
+        "\n"
+        "Post-selection keybinds (after region/window is chosen):\n"
+        "  s          Save to disk  (%s)\n"
+        "  y          Copy to clipboard\n"
+        "  a          Open annotation tool\n"
+        "  1-9        Run script from " OPTSCRIPTDIR "\n"
+        "  Escape     Cancel\n",
+        prog, OPTDIR);
+}
+
 // ── Built-in actions ──────────────────────────────────────────────────────────
 
 static void action_save(const char *path) {
@@ -51,13 +76,32 @@ static void action_annotate(const char *path) {
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 int main(int argc, char *argv[]) {
-    (void)argv;
+    /* -1 = interactive, 0 = fullscreen, 1 = window */
+    int headless_mode = -1;
+
+    int opt;
+    while ((opt = getopt(argc, argv, "hfw")) != -1) {
+        switch (opt) {
+        case 'h':
+            usage(argv[0]);
+            return 0;
+        case 'f':
+            headless_mode = 0;
+            break;
+        case 'w':
+            headless_mode = 1;
+            break;
+        default:
+            usage(argv[0]);
+            return 1;
+        }
+    }
 
     if (!xutil_init())
         die("Failed to open display / get root window size");
 
-    // ── Headless full-screen mode (any CLI argument) ──────────────────────────
-    if (argc > 1) {
+    // ── Headless fullscreen mode: -f ──────────────────────────────────────────
+    if (headless_mode == 0) {
         if (!screenshot()) die("Failed to capture screen");
         XSync(disp, False);
 
@@ -69,7 +113,21 @@ int main(int argc, char *argv[]) {
         goto end; // only reached if xclip is missing
     }
 
-    // ── Interactive mode ──────────────────────────────────────────────────────
+    // ── Headless window-pick mode: -w ─────────────────────────────────────────
+    if (headless_mode == 1) {
+        Rect wr = {0, 0, 0, 0};
+        if (!capture_window(&wr)) die("Window capture cancelled or failed");
+        XSync(disp, False);
+
+        char path[4096];
+        if (save_image_path(path, sizeof(path)) != 0)
+            die("Failed to save screenshot");
+
+        action_copy(path);
+        goto end;
+    }
+
+    // ── Interactive mode (no args) ────────────────────────────────────────────
     if (!xutil_create_window())     die("Failed to create overlay window");
     if (!xutil_create_gc())         die("Failed to create GC");
     if (!xutil_create_backbuffer()) die("Failed to create backbuffer");
@@ -80,7 +138,8 @@ int main(int argc, char *argv[]) {
         if (result == SELECT_CANCEL) goto end;
     }
 
-    // Clamp selection to screen bounds before cropping
+    // img is always a full W×H screenshot at this point (region, fullscreen,
+    // and window modes all end with a full-screen img).  Crop to the rect.
     {
         int x = select_x(), y = select_y();
         int w = select_w(), h = select_h();
@@ -90,8 +149,8 @@ int main(int argc, char *argv[]) {
         if (y + h > H) h = H - y;
         if (w < 1 || h < 1) goto end;
         img = XSubImage(img, x, y, w, h);
+        if (!img) die("XSubImage failed");
     }
-    if (!img) die("XSubImage failed");
 
     XSync(disp, False);
 
@@ -130,7 +189,6 @@ int main(int argc, char *argv[]) {
 
         case ACTION_NONE:
         default:
-            // No action chosen (shouldn't happen) — just print the path
             action_save(path);
             break;
         }

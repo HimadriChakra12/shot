@@ -23,9 +23,10 @@
 
 // ── Pre-selection action keybinds ────────────────────────────────────────────
 #define OPTKEY_FULLSCREEN XK_f
+#define OPTKEY_WINDOW     XK_w
 
 // ── Post-selection action keybinds ────────────────────────────────────────────
-#define OPTKEY_SAVE     XK_w
+#define OPTKEY_SAVE     XK_s
 #define OPTKEY_COPY     XK_y
 #define OPTKEY_ANNOTATE XK_a
 

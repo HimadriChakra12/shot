@@ -342,6 +342,7 @@ int run_selection(void) {
                 debug("phase1 key: %lu", ks);
                 if (ks == XK_Escape)          { ungrab_all(); return SELECT_CANCEL; }
                 if (ks == OPTKEY_FULLSCREEN)  { mode = MODE_FULLSCREEN; break; }
+                if (ks == OPTKEY_WINDOW)      { mode = MODE_WINDOW;     break; }
                 break; // any other key = region
             }
             if (e.type == ButtonPress) {
@@ -356,6 +357,39 @@ int run_selection(void) {
     // ── Phase 2: capture rect ─────────────────────────────────────────────────
     if (mode == MODE_FULLSCREEN) {
         rect.x = 0; rect.y = 0; rect.w = W; rect.h = H;
+        redraw();
+    } else if (mode == MODE_WINDOW) {
+        /* Release our grabs — capture_window_rect does its own pointer grab.
+         * Unmap overlay so the user can see real window decorations to click. */
+        ungrab_all();
+        XUnmapWindow(disp, win);
+        XSync(disp, False);
+
+        /* User clicks a window; we get back its root-relative rect only. */
+        Rect wr = {0, 0, 0, 0};
+        if (!capture_window_rect(&wr)) return SELECT_CANCEL;
+        rect = wr;
+
+        /* Take a fresh full-screen shot (overlay is gone → real desktop pixels).
+         * img is W×H — exactly what redraw() / XSubImage expect. */
+        if (img) { XDestroyImage(img); img = NULL; }
+        if (!screenshot()) return SELECT_CANCEL;
+        drawing_init();
+
+        /* Restore overlay and re-grab for phase 3. */
+        XMapRaised(disp, win);
+        XSync(disp, False);
+        if (XGrabPointer(disp, root, False,
+                         ButtonPressMask|ButtonReleaseMask|PointerMotionMask,
+                         GrabModeAsync, GrabModeAsync,
+                         None, XCreateFontCursor(disp, XC_crosshair),
+                         CurrentTime) != GrabSuccess) {
+            return SELECT_CANCEL;
+        }
+        if (!grab_kbd()) {
+            XUngrabPointer(disp, CurrentTime);
+            return SELECT_CANCEL;
+        }
         redraw();
     } else {
         if (!do_drag()) { ungrab_all(); return SELECT_CANCEL; }

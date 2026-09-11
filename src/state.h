@@ -4,6 +4,7 @@
 typedef enum {
     MODE_REGION,
     MODE_FULLSCREEN,
+    MODE_WINDOW,
 } Mode;
 
 // ── App states ────────────────────────────────────────────────────────────────
